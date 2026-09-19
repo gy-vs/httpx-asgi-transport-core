@@ -161,8 +161,18 @@ class ASGITransport(AsyncBaseTransport):
         try:
             await self.app(scope, receive, send)
         except Exception:  # noqa: PIE-786
-            if self.raise_app_exceptions or not response_complete.is_set():
+            if self.raise_app_exceptions:
                 raise
+
+            # Suppress the exception, and ensure that the response stream
+            # is ended, so that the client is not left waiting indefinitely.
+            response_complete.set()
+            if status_code is None:
+                # The application raised before sending a response.
+                # Respond with a 500 "Internal Server Error".
+                status_code = 500
+            if response_headers is None:
+                response_headers = {}
 
         assert response_complete.is_set()
         assert status_code is not None

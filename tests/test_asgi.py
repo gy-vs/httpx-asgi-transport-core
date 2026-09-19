@@ -70,6 +70,15 @@ async def raise_exc_after_response(scope, receive, send):
     raise RuntimeError()
 
 
+async def raise_exc_after_response_start(scope, receive, send):
+    status = 200
+    headers = [(b"content-type", "text/plain")]
+
+    await send({"type": "http.response.start", "status": status, "headers": headers})
+    await send({"type": "http.response.body", "body": b"Hello, ", "more_body": True})
+    raise RuntimeError()
+
+
 @pytest.mark.anyio
 async def test_asgi_transport():
     async with httpx.ASGITransport(app=hello_world) as transport:
@@ -157,6 +166,55 @@ async def test_asgi_exc_after_response():
     async with httpx.AsyncClient(app=raise_exc_after_response) as client:
         with pytest.raises(RuntimeError):
             await client.get("http://www.example.org/")
+
+
+@pytest.mark.anyio
+async def test_asgi_exc_after_response_start():
+    async with httpx.AsyncClient(app=raise_exc_after_response_start) as client:
+        with pytest.raises(RuntimeError):
+            await client.get("http://www.example.org/")
+
+
+@pytest.mark.anyio
+async def test_asgi_exc_no_raise():
+    # With `raise_app_exceptions=False` an exception raised by the app
+    # before the response has started results in a 500 response.
+    transport = httpx.ASGITransport(app=raise_exc, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport) as client:
+        response = await client.get("http://www.example.org/")
+
+    assert response.status_code == 500
+    assert response.content == b""
+
+
+@pytest.mark.anyio
+async def test_asgi_exc_after_response_start_no_raise():
+    # With `raise_app_exceptions=False` an exception raised by the app
+    # once the response has started does not alter the response status
+    # or headers, and the response body is ended rather than left incomplete.
+    transport = httpx.ASGITransport(
+        app=raise_exc_after_response_start, raise_app_exceptions=False
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        response = await client.get("http://www.example.org/")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/plain"
+    assert response.content == b"Hello, "
+
+
+@pytest.mark.anyio
+async def test_asgi_exc_after_response_no_raise():
+    # With `raise_app_exceptions=False` an exception raised by the app
+    # after a complete response has been sent is suppressed.
+    transport = httpx.ASGITransport(
+        app=raise_exc_after_response, raise_app_exceptions=False
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        response = await client.get("http://www.example.org/")
+
+    assert response.status_code == 200
+    assert response.content == b"Hello, World!"
 
 
 @pytest.mark.anyio
