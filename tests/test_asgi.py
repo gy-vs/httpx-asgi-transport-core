@@ -70,6 +70,16 @@ async def raise_exc_after_response(scope, receive, send):
     raise RuntimeError()
 
 
+async def raise_exc_after_partial_response(scope, receive, send):
+    status = 200
+    partial = b"Hello"
+    headers = [(b"content-type", "text/plain"), (b"content-length", "13")]
+
+    await send({"type": "http.response.start", "status": status, "headers": headers})
+    await send({"type": "http.response.body", "body": partial, "more_body": True})
+    raise RuntimeError()
+
+
 @pytest.mark.anyio
 async def test_asgi_transport():
     async with httpx.ASGITransport(app=hello_world) as transport:
@@ -157,6 +167,53 @@ async def test_asgi_exc_after_response():
     async with httpx.AsyncClient(app=raise_exc_after_response) as client:
         with pytest.raises(RuntimeError):
             await client.get("http://www.example.org/")
+
+
+@pytest.mark.anyio
+async def test_asgi_exc_raise_app_exceptions():
+    transport = httpx.ASGITransport(app=raise_exc, raise_app_exceptions=True)
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(RuntimeError):
+            await client.get("http://www.example.org/")
+
+
+@pytest.mark.anyio
+async def test_asgi_exc_before_response_suppressed():
+    transport = httpx.ASGITransport(app=raise_exc, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport) as client:
+        response = await client.get("http://www.example.org/")
+
+    assert response.status_code == 500
+    assert response.content == b""
+
+
+@pytest.mark.anyio
+async def test_asgi_exc_after_response_suppressed():
+    transport = httpx.ASGITransport(
+        app=raise_exc_after_response, raise_app_exceptions=False
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        response = await client.get("http://www.example.org/")
+
+    assert response.status_code == 200
+    assert response.headers["content-length"] == "13"
+    assert response.content == b"Hello, World!"
+
+
+@pytest.mark.anyio
+async def test_asgi_exc_after_partial_response_suppressed():
+    transport = httpx.ASGITransport(
+        app=raise_exc_after_partial_response, raise_app_exceptions=False
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        response = await client.get("http://www.example.org/")
+
+    # The status and headers sent before the exception must not be overwritten,
+    # and reading the response must not hang waiting for completion.
+    assert response.status_code == 200
+    assert response.headers["content-length"] == "13"
+    await response.aread()
+    assert response.content == b"Hello"
 
 
 @pytest.mark.anyio

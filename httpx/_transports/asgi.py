@@ -161,8 +161,21 @@ class ASGITransport(AsyncBaseTransport):
         try:
             await self.app(scope, receive, send)
         except Exception:  # noqa: PIE-786
-            if self.raise_app_exceptions or not response_complete.is_set():
+            if self.raise_app_exceptions:
                 raise
+
+            # Wrap the exception into a 500 response if the application failed
+            # before the response started. Once `http.response.start` has been
+            # sent the status and headers are already committed, so we only
+            # need to ensure the response stream is terminated, otherwise the
+            # receiver could end up waiting forever.
+            if not response_started:
+                status_code = 500
+                response_headers = []
+                body_parts = []
+                response_started = True
+
+            response_complete.set()
 
         assert response_complete.is_set()
         assert status_code is not None
